@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Métriques de performance du contexte** (22/01/2026)
+  - Compteurs: compressions, doublons éliminés, filtrages par importance
+  - Tokens économisés calculés automatiquement
+  - Répartition CRITICAL/IMPORTANT/CONTEXT en %
+  - Affichage détaillé dans /stats
+  - Suivi de l'efficacité des optimisations
 - **Compression du contexte** (22/01/2026)
   - Élimination automatique des répétitions (hash-based deduplication)
   - Compression des longues sorties d'outils (>5000 chars → 3000 chars)

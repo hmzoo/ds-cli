@@ -1,5 +1,35 @@
 # 🧠 Analyse du Système de Contexte - DeepSeek Dev Agent
 
+#### 3. **Métriques de Performance** ✅
+**Implémenté** : Monitoring automatique du contexte
+
+**Fonctionnalités** :
+- Compteurs de compressions et filtrages
+- Calcul automatique des tokens économisés
+- Répartition par importance (CRITICAL/IMPORTANT/CONTEXT)
+- Affichage dans la commande `/stats`
+
+**Exemple de sortie** :
+```
+📊 Statistiques de session:
+  Messages: 12 total
+  Tokens historique: ~3200
+  Tokens moyens/msg: ~266
+
+🗜️  Optimisation du contexte:
+  Compressions: 3 fois
+  Doublons éliminés: 5 messages
+  Filtrages par importance: 2 messages
+  Tokens économisés: ~1330 (-29.3%)
+
+🏷️  Répartition par importance:
+  [CRITICAL]:   2 (16.7%)
+  [IMPORTANT]: 7 (58.3%)
+  [CONTEXT]:    3 (25.0%)
+```
+
+---
+
 ## ✅ IMPLÉMENTÉ - 22 janvier 2026
 
 ### Solutions Mises en Place
