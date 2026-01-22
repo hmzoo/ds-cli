@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Compression du contexte** (22/01/2026)
+  - Élimination automatique des répétitions (hash-based deduplication)
+  - Compression des longues sorties d'outils (>5000 chars → 3000 chars)
+  - Économie estimée: 15-30% des messages, 500-1500 tokens par conversation
+- **Système de tags d'importance** (22/01/2026)
+  - Tags automatiques: [CRITICAL], [IMPORTANT], [CONTEXT]
+  - Filtrage intelligent basé sur l'importance
+  - Priorité CRITICAL > IMPORTANT > CONTEXT lors de la troncature
+  - Patterns reconnus: erreurs, actions, préférences
+- **readline support**: Édition de texte avec les flèches et historique des commandes (22/01/2026)
+  - Navigation dans le texte (← → Ctrl+A Ctrl+E)
+  - Historique persistant (↑ ↓) dans ~/.deepseek_agent_history
+  - Raccourcis d'édition (Ctrl+U Ctrl+K Ctrl+W)
+  - Documentation des raccourcis dans /help
 - Initial project structure and documentation
 - Core CLI framework with Click
 - Basic tool implementations (file, shell, memory, web)
@@ -19,7 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation framework
 
 ### Changed
-- N/A (initial release)
+- **_truncate_history()**: Intégration compression + filtrage avant troncature classique (22/01/2026)
+- **add_message()**: Tagging automatique de tous les messages user/assistant (22/01/2026)
 
 ### Deprecated
 - N/A (initial release)
@@ -28,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - N/A (initial release)
 
 ### Fixed
+- **Prompt dysfonctionnel**: Les flèches n'affichent plus de caractères de contrôle (22/01/2026)
+- **Répétitions contexte**: Messages dupliqués éliminés automatiquement (22/01/2026)
+- **Contexte surchargé**: Messages peu importants filtrés intelligemment (22/01/2026)
 - N/A (initial release)
 
 ### Security
