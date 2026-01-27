@@ -22,6 +22,13 @@ try:
         readline.read_history_file(HISTORY_FILE)
     # Limiter l'historique à 1000 commandes
     readline.set_history_length(1000)
+    
+    # Configuration pour améliorer les performances
+    readline.parse_and_bind('tab: complete')
+    readline.parse_and_bind('set editing-mode emacs')
+    readline.parse_and_bind('set show-all-if-ambiguous on')
+    readline.parse_and_bind('set completion-ignore-case on')
+    
 except ImportError:
     # readline n'est pas disponible (Windows sans pyreadline3)
     readline = None
@@ -1017,8 +1024,14 @@ def main():
     # Boucle principale
     while True:
         try:
-            # Prompt utilisateur
-            user_input = input(f"{Colors.GREEN}👤 Vous:{Colors.RESET} ").strip()
+            # Prompt utilisateur avec délimiteurs readline pour les couleurs
+            if readline:
+                # Utiliser les délimiteurs \001 et \002 pour que readline ignore les codes couleur
+                prompt = f"\001{Colors.GREEN}\002👤 Vous:\001{Colors.RESET}\002 "
+            else:
+                prompt = f"{Colors.GREEN}👤 Vous:{Colors.RESET} "
+            
+            user_input = input(prompt).strip()
             
             if not user_input:
                 continue

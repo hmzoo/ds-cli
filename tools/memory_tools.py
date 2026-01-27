@@ -35,7 +35,26 @@ class QdrantMemory:
         
         # Modèle d'embeddings sémantiques
         print(f"🔄 Chargement du modèle {model_name}...")
-        self.model = SentenceTransformer(model_name)
+        # Détecter le device disponible (CUDA si disponible, sinon CPU)
+        # Utiliser une approche robuste pour éviter les blocages CUDA dans WSL
+        device = 'cpu'  # Par défaut
+        try:
+            import torch
+            # Vérifier si CUDA_VISIBLE_DEVICES est défini (meilleure approche pour WSL)
+            cuda_devices = os.getenv('CUDA_VISIBLE_DEVICES')
+            if cuda_devices is not None and cuda_devices != '':
+                # Tenter d'utiliser CUDA seulement si explicitement demandé
+                if torch.cuda.is_available():
+                    device = 'cuda'
+                    print(f"🚀 GPU: {torch.cuda.get_device_name(0)}")
+            else:
+                # En WSL, utiliser CPU par défaut pour éviter les problèmes d'initialisation CUDA
+                print(f"💡 Astuce: Définir CUDA_VISIBLE_DEVICES=0 pour utiliser le GPU")
+        except Exception as e:
+            print(f"⚠️  CUDA non disponible: {e}")
+        
+        print(f"🎯 Device: {device}")
+        self.model = SentenceTransformer(model_name, device=device)
         print(f"✅ Modèle chargé ({self.model.get_sentence_embedding_dimension()} dimensions)")
         
         # Vérifier que la collection existe
