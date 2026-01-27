@@ -32,3 +32,18 @@ from .web_tools import (
     extract_links,
     summarize_webpage
 )
+
+from .qdrant_backup import (
+    backup_qdrant,
+    restore_qdrant,
+    list_backups,
+    get_backup_stats
+)
+
+from .git_tools import (
+    git_status,
+    git_diff,
+    git_commit,
+    git_log,
+    git_branch_list
+)

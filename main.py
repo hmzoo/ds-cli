@@ -40,7 +40,9 @@ from tools import (
     read_file, write_file, list_files, file_exists, append_file, replace_in_file,
     execute_command, check_command_exists, get_system_info,
     remember, recall, search_facts, decide, get_memory,
-    search_web, fetch_webpage, extract_links, summarize_webpage
+    search_web, fetch_webpage, extract_links, summarize_webpage,
+    backup_qdrant, restore_qdrant, list_backups, get_backup_stats,
+    git_status, git_diff, git_commit, git_log, git_branch_list
 )
 
 
@@ -86,6 +88,19 @@ class ToolExecutor:
             'fetch_webpage': fetch_webpage,
             'extract_links': extract_links,
             'summarize_webpage': summarize_webpage,
+            
+            # Qdrant backup tools
+            'backup_qdrant': backup_qdrant,
+            'restore_qdrant': restore_qdrant,
+            'list_backups': list_backups,
+            'get_backup_stats': get_backup_stats,
+            
+            # Git tools
+            'git_status': git_status,
+            'git_diff': git_diff,
+            'git_commit': git_commit,
+            'git_log': git_log,
+            'git_branch_list': git_branch_list,
         }
     
     def execute(self, tool_name: str, **kwargs) -> Any:
@@ -198,6 +213,19 @@ Syntaxe: <tool>{"name": "outil", "parameters": {...}}</tool>
 - fetch_webpage(url: str) → contenu page web
 - extract_links(url: str) → extrait liens
 - summarize_webpage(url: str) → résumé page
+
+**Backup Qdrant:**
+- backup_qdrant(backup_dir: str = "./backups") → sauvegarde la mémoire Qdrant
+- restore_qdrant(backup_file: str, clear_existing: bool = False) → restaure depuis backup
+- list_backups(backup_dir: str = "./backups") → liste les backups disponibles
+- get_backup_stats(backup_file: str) → statistiques d'un backup
+
+**Git:**
+- git_status(repository_path: str = ".") → statut du dépôt Git
+- git_diff(file_path: str = "", repository_path: str = ".", staged: bool = False) → différences Git
+- git_commit(message: str, repository_path: str = ".", add_all: bool = False) → créer un commit
+- git_log(max_count: int = 10, repository_path: str = ".") → historique des commits
+- git_branch_list(repository_path: str = ".") → liste des branches
 
 Exemples:
 <tool>{"name": "list_files", "parameters": {"directory": ".", "pattern": "*.py"}}</tool>
@@ -757,6 +785,9 @@ Résumé (3 lignes max, format: 'Objectif: ... | Fait: ... | Reste: ...'):"""
             else:
                 full_response = self._get_response(headers, data)
             
+            # Estimer tokens output
+            self.token_stats['total_output'] += self._estimate_tokens(full_response)
+            
             # Extraire et exécuter les appels d'outils
             tool_calls = self._extract_tool_calls(full_response)
             
@@ -942,10 +973,18 @@ Résumé (3 lignes max, format: 'Objectif: ... | Fait: ... | Reste: ...'):"""
             print(f"  Taux de succès: {success_rate:.1f}%")
         
         # Stats tokens (estimation)
+        # Tarif DeepSeek v3: $0.14/1M input tokens, $0.28/1M output tokens
+        input_cost = self.token_stats['total_input'] * 0.14 / 1_000_000
+        output_cost = self.token_stats['total_output'] * 0.28 / 1_000_000
+        memory_cost = self.token_stats['memory_tokens'] * 0.14 / 1_000_000
+        total_cost = input_cost + output_cost + memory_cost
+        
         print(f"\n{Colors.YELLOW}💰 Consommation tokens (estimation):{Colors.RESET}")
-        print(f"  Tokens mémoire: ~{self.token_stats['memory_tokens']} ({self.token_stats['memory_queries']} requêtes)")
-        print(f"  Coût estimé mémoire: ~${self.token_stats['memory_tokens'] * 0.00000014:.6f}")
-        print(f"{Colors.DIM}  (Limite stricte: 3 faits × ~50 tokens = ~150 tokens/requête max){Colors.RESET}")
+        print(f"  Tokens input:  ~{self.token_stats['total_input']:,} (${input_cost:.6f})")
+        print(f"  Tokens output: ~{self.token_stats['total_output']:,} (${output_cost:.6f})")
+        print(f"  Tokens mémoire: ~{self.token_stats['memory_tokens']:,} ({self.token_stats['memory_queries']} requêtes, ${memory_cost:.6f})")
+        print(f"  {Colors.BOLD}Coût total estimé: ${total_cost:.6f}{Colors.RESET}")
+        print(f"{Colors.DIM}  (Tarif: $0.14/1M input, $0.28/1M output - Limite mémoire: 3 faits × 50 tokens max){Colors.RESET}")
         
         # Stats mémoire
         memory = get_memory()
@@ -975,6 +1014,9 @@ def print_banner():
   /clear  - Effacer l'historique
   /stats  - Afficher les statistiques + tokens
   /tools  - Lister les outils
+  /backup - Sauvegarder la mémoire Qdrant
+  /backups - Lister les backups
+  /restore <file> - Restaurer depuis backup
   /help   - Afficher l'aide
   /quit   - Quitter (ou Ctrl+D)
 
@@ -992,6 +1034,9 @@ def print_help():
 {Colors.BOLD}/clear{Colors.RESET}  - Efface l'historique de la conversation
 {Colors.BOLD}/stats{Colors.RESET}  - Affiche les statistiques de la session
 {Colors.BOLD}/tools{Colors.RESET}  - Liste les outils disponibles
+{Colors.BOLD}/backup{Colors.RESET} - Sauvegarde la mémoire Qdrant
+{Colors.BOLD}/backups{Colors.RESET} - Liste les backups disponibles
+{Colors.BOLD}/restore <file>{Colors.RESET} - Restaure depuis un backup
 {Colors.BOLD}/help{Colors.RESET}   - Affiche cette aide
 {Colors.BOLD}/quit{Colors.RESET}   - Quitte le chat (ou Ctrl+D)
 
@@ -1059,6 +1104,42 @@ def main():
                     agent.show_stats()
                 elif command == '/tools':
                     agent.show_tools()
+                elif command == '/backup':
+                    print(f"{Colors.CYAN}💾 Backup de la mémoire Qdrant...{Colors.RESET}")
+                    result = backup_qdrant()
+                    if result.get('success'):
+                        print(f"{Colors.GREEN}✅ Backup réussi !{Colors.RESET}")
+                        print(f"  Fichier: {result['backup_file']}")
+                        print(f"  Points: {result['total_points']}")
+                        print(f"  Taille: {result['file_size'] / 1024:.1f} KB")
+                        if result.get('statistics'):
+                            print(f"  Types: {result['statistics']}")
+                    else:
+                        print(f"{Colors.RED}❌ Erreur: {result.get('error')}{Colors.RESET}")
+                elif command.startswith('/restore '):
+                    backup_file = user_input[9:].strip()
+                    if not backup_file:
+                        print(f"{Colors.RED}❌ Usage: /restore <fichier_backup>{Colors.RESET}")
+                    else:
+                        print(f"{Colors.CYAN}♻️  Restauration depuis {backup_file}...{Colors.RESET}")
+                        result = restore_qdrant(backup_file)
+                        if result.get('success'):
+                            print(f"{Colors.GREEN}✅ Restauration réussie !{Colors.RESET}")
+                            print(f"  Collection: {result['collection']}")
+                            print(f"  Points restaurés: {result['points_restored']}")
+                        else:
+                            print(f"{Colors.RED}❌ Erreur: {result.get('error')}{Colors.RESET}")
+                elif command == '/backups':
+                    backups = list_backups()
+                    if not backups:
+                        print(f"{Colors.YELLOW}ℹ️  Aucun backup trouvé{Colors.RESET}")
+                    else:
+                        print(f"{Colors.CYAN}📦 Backups disponibles:{Colors.RESET}")
+                        for backup in backups:
+                            print(f"\n  📄 {backup['filename']}")
+                            print(f"     Taille: {backup['size'] / 1024:.1f} KB")
+                            print(f"     Points: {backup['total_points']}")
+                            print(f"     Date: {backup['created'][:19]}")
                 elif command == '/help' or command == '/?':
                     print_help()
                 else:
