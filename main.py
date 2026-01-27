@@ -37,9 +37,9 @@ except ImportError:
 # Importer les outils
 sys.path.insert(0, str(Path(__file__).parent))
 from tools import (
-    read_file, write_file, list_files, file_exists, append_file,
+    read_file, write_file, list_files, file_exists, append_file, replace_in_file,
     execute_command, check_command_exists, get_system_info,
-    remember, recall, decide, get_memory,
+    remember, recall, search_facts, decide, get_memory,
     search_web, fetch_webpage, extract_links, summarize_webpage
 )
 
@@ -68,6 +68,7 @@ class ToolExecutor:
             'list_files': list_files,
             'file_exists': file_exists,
             'append_file': append_file,
+            'replace_in_file': replace_in_file,
             
             # Shell tools
             'execute_command': execute_command,
@@ -77,6 +78,7 @@ class ToolExecutor:
             # Memory tools
             'remember': remember,
             'recall': recall,
+            'search_facts': search_facts,
             'decide': decide,
             
             # Web tools
@@ -176,6 +178,7 @@ Syntaxe: <tool>{"name": "outil", "parameters": {...}}</tool>
 - write_file(file_path: str, content: str) → écrit fichier (max 50KB)
 - append_file(file_path: str, content: str) → ajoute au fichier
 - replace_in_file(file_path: str, old_text: str, new_text: str) → remplace texte dans fichier
+  ⚠️ old_text doit être EXACTEMENT identique (espaces, sauts de ligne). Utilisez read_file() d'abord!
 - list_files(directory: str, pattern: str = "*", max_results: int = 100) → liste fichiers
 - file_exists(file_path: str) → vérifie existence
 
@@ -185,9 +188,10 @@ Syntaxe: <tool>{"name": "outil", "parameters": {...}}</tool>
 - get_system_info() → infos système
 
 **Mémoire:**
-- remember(information: str, category: str = "general") → mémorise fait
-- recall(query: str, max_results: int = 3) → recherche faits
-- decide(question: str, context: str = "") → décide basé sur mémoire
+- remember(fact: str, category: str = "general") → mémorise un fait
+- recall(category: str = None, limit: int = 10) → récupère faits par catégorie
+- search_facts(query: str, limit: int = 5) → recherche sémantique dans les faits
+- decide(decision: str, reasoning: str) → enregistre une décision
 
 **Web:**
 - search_web(query: str, max_results: int = 5) → recherche Tavily

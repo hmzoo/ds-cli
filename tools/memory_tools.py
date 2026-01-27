@@ -415,8 +415,13 @@ def remember(fact: str, category: str = "general") -> Dict:
 
 
 def recall(category: Optional[str] = None, limit: int = 10) -> List[Dict]:
-    """Récupère des faits de la mémoire"""
+    """Récupère des faits de la mémoire par catégorie"""
     return get_memory().get_facts(category, limit)
+
+
+def search_facts(query: str, limit: int = 5) -> List[Dict]:
+    """Recherche sémantique dans les faits mémorisés"""
+    return get_memory().search_facts(query, limit)
 
 
 def decide(decision: str, reasoning: str) -> Dict:

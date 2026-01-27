@@ -22,6 +22,7 @@ from .memory_tools import (
     get_memory,
     remember,
     recall,
+    search_facts,
     decide
 )
 
