@@ -12,6 +12,7 @@ import requests
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 import traceback
+from datetime import datetime
 
 # Support pour l'édition de ligne avec les flèches
 try:
@@ -44,6 +45,7 @@ from tools import (
     backup_qdrant, restore_qdrant, list_backups, get_backup_stats,
     git_status, git_diff, git_commit, git_log, git_branch_list
 )
+from qdrant_client.models import Filter, FieldCondition, MatchValue
 
 
 class Colors:
@@ -149,6 +151,10 @@ class DeepSeekAgent:
         self.tool_executor = ToolExecutor()
         self.memory = get_memory()  # Accès direct à la mémoire
         
+        # NOUVEAU: Détection de boucles
+        self.tool_call_history = []  # Historique des appels d'outils récents
+        self.max_identical_calls = 3  # Max d'appels identiques consécutifs
+        
         # Statistiques de tokens (estimation conservative)
         self.token_stats = {
             'total_input': 0,
@@ -166,8 +172,91 @@ class DeepSeekAgent:
             'critical_messages': 0,
             'important_messages': 0,
             'context_messages': 0,
-            'max_context_tokens_reached': 0
+            'max_context_tokens_reached': 0,
+            'loop_detections': 0  # Nombre de boucles détectées
         }
+    
+    def save_conversation(self) -> bool:
+        """Sauvegarde la conversation courante dans la mémoire"""
+        try:
+            if len(self.conversation_history) < 2:
+                return False  # Pas assez de messages à sauvegarder
+            
+            # Extraire les sujets et actions de la conversation
+            topics = []
+            outcomes = []
+            
+            for msg in self.conversation_history:
+                if msg['role'] == 'user':
+                    # Extraire les premiers mots comme sujets
+                    content = msg['content'].replace('[CRITICAL]', '').replace('[IMPORTANT]', '').replace('[CONTEXT]', '').strip()
+                    words = content.split()[:5]
+                    topic = ' '.join(words)
+                    if topic and topic not in topics:
+                        topics.append(topic)
+                elif 'succès' in msg['content'].lower() or 'créé' in msg['content'].lower():
+                    # Extraire les actions réussies
+                    lines = msg['content'].split('\n')
+                    for line in lines[:3]:
+                        if line.strip():
+                            outcomes.append(line.strip()[:100])
+            
+            # Limiter la taille
+            topics = topics[:5]
+            outcomes = outcomes[:5]
+            
+            # Créer un résumé
+            summary = f"Conversation du {datetime.now().strftime('%Y-%m-%d %H:%M')}: "
+            if self.initial_request:
+                summary += self.initial_request[:200]
+            else:
+                summary += "Session interactive"
+            
+            # Sauvegarder dans Qdrant
+            self.memory.store_conversation_summary(
+                summary=summary,
+                topics=topics,
+                outcomes=outcomes
+            )
+            return True
+        except Exception as e:
+            print(f"{Colors.DIM}⚠️  Erreur sauvegarde conversation: {e}{Colors.RESET}")
+            return False
+    
+    def load_last_conversation(self) -> Optional[str]:
+        """Charge le résumé de la dernière conversation"""
+        try:
+            # Rechercher toutes les conversations (sans order_by qui nécessite un index)
+            results = self.memory.client.scroll(
+                collection_name=self.memory.collection_name,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="type", match=MatchValue(value="conversation"))]
+                ),
+                limit=100,  # Récupérer jusqu'à 100 conversations
+                with_payload=True
+            )
+            
+            if results and len(results[0]) > 0:
+                # Trier côté client par timestamp (ISO format se trie alphabétiquement)
+                conversations = results[0]
+                if conversations:
+                    # Trier par timestamp décroissant
+                    sorted_convs = sorted(
+                        conversations,
+                        key=lambda x: x.payload.get('timestamp', ''),
+                        reverse=True
+                    )
+                    last_conv = sorted_convs[0].payload
+                    summary = f"📜 Dernière conversation:\n"
+                    summary += f"  {last_conv.get('summary', 'N/A')}\n"
+                    if last_conv.get('topics'):
+                        summary += f"  Sujets: {', '.join(last_conv['topics'][:3])}\n"
+                    if last_conv.get('outcomes'):
+                        summary += f"  Actions: {', '.join(last_conv['outcomes'][:2])}"
+                    return summary
+        except Exception as e:
+            print(f"{Colors.DIM}⚠️  Erreur chargement conversation: {e}{Colors.RESET}")
+        return None
         
     def _load_system_prompt(self) -> str:
         """Charge les instructions système depuis SYSTEM.md"""
@@ -286,6 +375,16 @@ Notes:
     
     def _tag_message_importance(self, message: str, role: str) -> tuple:
         """Tag un message selon son importance: CRITICAL, IMPORTANT, CONTEXT"""
+        # CRITIQUE: Ne pas re-tagger un message déjà taggé (éviter [CONTEXT] [CONTEXT] ...)
+        if message.startswith('[CRITICAL]') or message.startswith('[IMPORTANT]') or message.startswith('[CONTEXT]'):
+            # Message déjà taggé, retourner tel quel
+            if message.startswith('[CRITICAL]'):
+                return 'CRITICAL', message
+            elif message.startswith('[IMPORTANT]'):
+                return 'IMPORTANT', message
+            else:
+                return 'CONTEXT', message
+        
         # Messages système = toujours CRITICAL
         if role == 'system':
             return 'CRITICAL', message
@@ -303,10 +402,9 @@ Notes:
             'objectif', 'goal', 'tâche', 'task'
         ]
         
-        # Patterns contexte
+        # Patterns contexte (RETIRÉS: context, info, detail pour éviter faux positifs avec les tags eux-mêmes)
         context_patterns = [
-            'préfère', 'prefer', 'aime', 'like', 'historique', 'history',
-            'info', 'information', 'détail', 'detail'
+            'préfère', 'prefer', 'aime', 'like', 'historique', 'history'
         ]
         
         message_lower = message.lower()
@@ -430,7 +528,7 @@ Notes:
     
     def _execute_tool_calls(self, tool_calls: List[Dict]) -> List[Dict]:
         """
-        Exécute une liste d'appels d'outils
+        Exécute une liste d'appels d'outils avec détection de boucles
         
         Args:
             tool_calls: Liste des appels d'outils
@@ -443,6 +541,44 @@ Notes:
         for tool_call in tool_calls:
             tool_name = tool_call.get('name')
             parameters = tool_call.get('parameters', {})
+            
+            # NOUVEAU: Détection de boucle
+            call_signature = f"{tool_name}:{json.dumps(parameters, sort_keys=True)}"
+            
+            # Vérifier si cet appel exact a été fait récemment
+            recent_calls = self.tool_call_history[-10:]  # Les 10 derniers appels
+            identical_count = recent_calls.count(call_signature)
+            
+            if identical_count >= self.max_identical_calls:
+                self.token_stats['loop_detections'] += 1
+                error_msg = (
+                    f"⚠️ BOUCLE DÉTECTÉE: L'outil '{tool_name}' avec les mêmes paramètres "
+                    f"a été appelé {identical_count + 1} fois consécutivement sans succès. "
+                    f"Arrêt pour éviter une boucle infinie."
+                )
+                print(f"\n{Colors.RED}{error_msg}{Colors.RESET}")
+                
+                # Retourner une erreur explicite
+                results.append({
+                    "tool": tool_name,
+                    "parameters": parameters,
+                    "result": {"error": error_msg, "loop_detected": True}
+                })
+                
+                # Ajouter un message d'aide à l'historique
+                help_msg = (
+                    f"\n\n⚠️ **BOUCLE DÉTECTÉE**: Vous répétez '{tool_name}' sans succès. "
+                    f"Essayez une approche différente ou demandez de l'aide à l'utilisateur."
+                )
+                self.add_message("user", help_msg)
+                continue
+            
+            # Enregistrer cet appel
+            self.tool_call_history.append(call_signature)
+            
+            # Limiter l'historique des appels pour ne pas exploser la mémoire
+            if len(self.tool_call_history) > 50:
+                self.tool_call_history = self.tool_call_history[-50:]
             
             print(f"\n{Colors.YELLOW}🔧 Exécution: {tool_name}({json.dumps(parameters, ensure_ascii=False)}){Colors.RESET}")
             
@@ -921,6 +1057,79 @@ Résumé (3 lignes max, format: 'Objectif: ... | Fait: ... | Reste: ...'):"""
         self.conversation_history = []
         print(f"{Colors.YELLOW}🔄 Historique effacé{Colors.RESET}")
     
+    def save_conversation(self) -> bool:
+        """Sauvegarde la conversation courante dans la mémoire"""
+        try:
+            if len(self.conversation_history) < 2:
+                return False  # Pas assez de messages à sauvegarder
+            
+            # Extraire les sujets et actions de la conversation
+            topics = []
+            outcomes = []
+            
+            for msg in self.conversation_history:
+                if msg['role'] == 'user':
+                    # Extraire les premiers mots comme sujets
+                    words = msg['content'].split()[:5]
+                    topic = ' '.join(words)
+                    if topic and topic not in topics:
+                        topics.append(topic)
+                elif 'succès' in msg['content'].lower() or 'créé' in msg['content'].lower():
+                    # Extraire les actions réussies
+                    lines = msg['content'].split('\n')
+                    for line in lines[:3]:
+                        if line.strip():
+                            outcomes.append(line.strip()[:100])
+            
+            # Limiter la taille
+            topics = topics[:5]
+            outcomes = outcomes[:5]
+            
+            # Créer un résumé
+            summary = f"Conversation du {datetime.now().strftime('%Y-%m-%d %H:%M')}: "
+            if self.initial_request:
+                summary += self.initial_request[:200]
+            else:
+                summary += "Session interactive"
+            
+            # Sauvegarder dans Qdrant
+            self.memory.store_conversation_summary(
+                summary=summary,
+                topics=topics,
+                outcomes=outcomes
+            )
+            return True
+        except Exception as e:
+            print(f"{Colors.DIM}⚠️  Erreur sauvegarde conversation: {e}{Colors.RESET}")
+            return False
+    
+    def load_last_conversation(self) -> Optional[str]:
+        """Charge le résumé de la dernière conversation"""
+        try:
+            # Rechercher les conversations récentes
+            results = self.memory.client.scroll(
+                collection_name=self.memory.collection_name,
+                scroll_filter=Filter(
+                    must=[FieldCondition(key="type", match=MatchValue(value="conversation"))]
+                ),
+                limit=1,
+                with_payload=True,
+                order_by="timestamp"
+            )
+            
+            if results and len(results[0]) > 0:
+                last_conv = results[0][0].payload
+                summary = f"📜 Dernière conversation:\n"
+                summary += f"  {last_conv.get('summary', 'N/A')}\n"
+                if last_conv.get('topics'):
+                    summary += f"  Sujets: {', '.join(last_conv['topics'][:3])}\n"
+                if last_conv.get('outcomes'):
+                    summary += f"  Actions: {', '.join(last_conv['outcomes'][:2])}"
+                return summary
+        except Exception as e:
+            print(f"{Colors.DIM}⚠️  Erreur chargement conversation: {e}{Colors.RESET}")
+        return None
+    
     def show_stats(self):
         """Affiche les statistiques de la session"""
         user_msgs = sum(1 for msg in self.conversation_history if msg['role'] == 'user')
@@ -968,6 +1177,7 @@ Résumé (3 lignes max, format: 'Objectif: ... | Fait: ... | Reste: ...'):"""
         print(f"\n{Colors.YELLOW}🛡️  Fiabilité:{Colors.RESET}")
         print(f"  Erreurs API: {self.token_stats.get('api_errors', 0)}")
         print(f"  Auto-corrections: {self.token_stats.get('auto_corrections', 0)}")
+        print(f"  Boucles détectées: {self.token_stats.get('loop_detections', 0)}")
         if self.token_stats.get('api_errors', 0) > 0:
             success_rate = (1 - self.token_stats.get('api_errors', 0) / max(user_msgs, 1)) * 100
             print(f"  Taux de succès: {success_rate:.1f}%")
@@ -1037,6 +1247,7 @@ def print_help():
 {Colors.BOLD}/backup{Colors.RESET} - Sauvegarde la mémoire Qdrant
 {Colors.BOLD}/backups{Colors.RESET} - Liste les backups disponibles
 {Colors.BOLD}/restore <file>{Colors.RESET} - Restaure depuis un backup
+{Colors.BOLD}/last{Colors.RESET}   - Affiche la dernière conversation
 {Colors.BOLD}/help{Colors.RESET}   - Affiche cette aide
 {Colors.BOLD}/quit{Colors.RESET}   - Quitte le chat (ou Ctrl+D)
 
@@ -1070,6 +1281,12 @@ def main():
     print(f"{Colors.DIM}Instructions système chargées depuis SYSTEM.md{Colors.RESET}")
     print(f"{Colors.DIM}Outils disponibles: {len(agent.tool_executor.list_available_tools())}{Colors.RESET}\n")
     
+    # Charger et afficher la dernière conversation
+    last_conv = agent.load_last_conversation()
+    if last_conv:
+        print(last_conv)
+        print()
+    
     # Boucle principale
     while True:
         try:
@@ -1090,6 +1307,10 @@ def main():
                 command = user_input.lower()
                 
                 if command == '/quit' or command == '/q':
+                    # Sauvegarder la conversation dans la mémoire
+                    print(f"{Colors.CYAN}💾 Sauvegarde de la conversation...{Colors.RESET}")
+                    if agent.save_conversation():
+                        print(f"{Colors.GREEN}✅ Conversation sauvegardée{Colors.RESET}")
                     print(f"{Colors.YELLOW}👋 Au revoir !{Colors.RESET}")
                     # Sauvegarder l'historique avant de quitter
                     if readline and HISTORY_FILE:
@@ -1140,6 +1361,12 @@ def main():
                             print(f"     Taille: {backup['size'] / 1024:.1f} KB")
                             print(f"     Points: {backup['total_points']}")
                             print(f"     Date: {backup['created'][:19]}")
+                elif command == '/last':
+                    last_conv = agent.load_last_conversation()
+                    if last_conv:
+                        print(last_conv)
+                    else:
+                        print(f"{Colors.YELLOW}ℹ️  Aucune conversation précédente trouvée{Colors.RESET}")
                 elif command == '/help' or command == '/?':
                     print_help()
                 else:
@@ -1153,7 +1380,11 @@ def main():
             print()  # Ligne vide pour la lisibilité
             
         except KeyboardInterrupt:
-            print(f"\n{Colors.YELLOW}👋 Au revoir !{Colors.RESET}")
+            # Sauvegarder la conversation dans la mémoire
+            print(f"\n{Colors.CYAN}💾 Sauvegarde de la conversation...{Colors.RESET}")
+            if agent.save_conversation():
+                print(f"{Colors.GREEN}✅ Conversation sauvegardée{Colors.RESET}")
+            print(f"{Colors.YELLOW}👋 Au revoir !{Colors.RESET}")
             # Sauvegarder l'historique avant de quitter
             if readline and HISTORY_FILE:
                 try:

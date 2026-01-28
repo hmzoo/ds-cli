@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Mémoire des conversations** (28/01/2026)
+  - Sauvegarde automatique de la conversation à la sortie (/quit, Ctrl+C)
+  - Chargement automatique de la dernière conversation au démarrage
+  - Commande `/last` pour afficher la dernière conversation
+  - Extraction automatique des sujets et actions réussies
+  - Stockage dans Qdrant avec indexation sémantique
+  - Documentation complète dans [CONVERSATION_MEMORY.md](docs/CONVERSATION_MEMORY.md)
+- **Détection de boucles infinies** (28/01/2026)
+  - Détection automatique des appels d'outils répétés (max 3 fois)
+  - Message d'erreur explicite avec suggestion d'alternative
+  - Compteur de boucles dans les statistiques
+  - Empêche l'agent de répéter indéfiniment une commande qui échoue
+- **Correction du bug de tagging** (28/01/2026)
+  - Protection anti-re-tagging pour éviter [CONTEXT] [CONTEXT] [CONTEXT]...
+  - Vérification si le message est déjà taggé avant d'ajouter un nouveau tag
+  - Retrait de patterns ambigus (context, info, detail) des context_patterns
 - **Métriques de performance du contexte** (22/01/2026)
   - Compteurs: compressions, doublons éliminés, filtrages par importance
   - Tokens économisés calculés automatiquement
